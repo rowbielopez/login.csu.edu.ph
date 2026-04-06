@@ -1,0 +1,11 @@
+node_modules/
+vendor/
+*.log
+.env
+.env.*
+config/firebase-service-account.json
+hris.sql
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
