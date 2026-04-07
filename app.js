@@ -29,14 +29,14 @@ function getBaseUrl(system) {
     const isProd = window.location.hostname === 'login.csu.edu.ph';
     const bases = {
         hris: isProd ? 'https://hris.csu.edu.ph' : 'http://localhost/hris.csu.edu.ph',
-        ofes: isProd ? 'https://ofes.csu.edu.ph' : 'http://localhost/ofes',
+        ofes: 'https://ofes.csu.edu.ph',
     };
     return bases[system] || '';
 }
-const HRIS_AUTH_URL      = getBaseUrl('hris') + '/api/auth/verify.php';
+const HRIS_AUTH_URL = getBaseUrl('hris') + '/api/auth/verify.php';
 const HRIS_DASHBOARD_URL = getBaseUrl('hris') + '/';
-const HRIS_ADMIN_URL     = getBaseUrl('hris') + '/admin/';
-const OFES_AUTH_URL      = getBaseUrl('ofes') + '/api/auth/verify.php';
+const HRIS_ADMIN_URL = getBaseUrl('hris') + '/admin/';
+const OFES_AUTH_URL = getBaseUrl('ofes') + '/api/auth/verify.php';
 
 // Initialize Firebase
 let auth = null;
