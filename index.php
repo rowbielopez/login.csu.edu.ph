@@ -1336,6 +1336,40 @@ $assetHost = (strpos($_SERVER['HTTP_HOST'] ?? '', 'csu.edu.ph') !== false)
 	</div>
 
 	<!-- ========================================
+		 SYSTEM ACCESS (e.g. OFES not registered)
+	======================================== -->
+	<div id="systemAccessModal" class="hidden fixed inset-0 modal-backdrop z-[60] flex items-center justify-center p-4"
+		role="alertdialog" aria-modal="true" aria-labelledby="systemAccessModalTitle">
+		<div class="bg-white rounded-3xl max-w-md w-full shadow-2xl overflow-hidden border border-slate-100">
+			<div class="flex items-center justify-between px-6 py-5 border-b border-slate-100">
+				<div class="flex items-center gap-3 min-w-0 pr-2">
+					<span
+						class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700"
+						aria-hidden="true">
+						<i class="fas fa-exclamation-triangle"></i>
+					</span>
+					<h3 id="systemAccessModalTitle" class="text-lg font-bold text-slate-900 leading-tight">Access notice
+					</h3>
+				</div>
+				<button id="closeSystemAccessModal" type="button"
+					class="w-10 h-10 flex flex-shrink-0 items-center justify-center rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 transition-colors focus-ring"
+					aria-label="Close dialog">
+					<i class="fas fa-times"></i>
+				</button>
+			</div>
+			<div class="px-6 py-5">
+				<p id="systemAccessModalBody" class="text-slate-600 text-sm leading-relaxed"></p>
+			</div>
+			<div class="px-6 pb-6">
+				<button id="systemAccessModalOk" type="button"
+					class="w-full py-3 bg-maroon-800 text-white rounded-xl font-semibold hover:bg-maroon-900 transition-colors focus-ring">
+					Got it
+				</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- ========================================
 		 ANNOUNCEMENT MODAL
 	======================================== -->
 	<div id="announcementModal" class="hidden fixed inset-0 modal-backdrop z-50 flex items-center justify-center p-4"

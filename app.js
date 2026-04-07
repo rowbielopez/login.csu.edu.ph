@@ -117,6 +117,13 @@ const DOM = {
     closeModal: document.getElementById('closeModal'),
     closeModalBtn: document.getElementById('closeModalBtn'),
 
+    // System access error (OFES / future systems)
+    systemAccessModal: document.getElementById('systemAccessModal'),
+    systemAccessModalTitle: document.getElementById('systemAccessModalTitle'),
+    systemAccessModalBody: document.getElementById('systemAccessModalBody'),
+    closeSystemAccessModal: document.getElementById('closeSystemAccessModal'),
+    systemAccessModalOk: document.getElementById('systemAccessModalOk'),
+
     // Updates Section
     filterTabs: document.querySelectorAll('.filter-tab'),
     updateItems: document.querySelectorAll('.update-item'),
@@ -540,6 +547,10 @@ const AuthController = {
         // Close dropdown on escape key
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                if (DOM.systemAccessModal && !DOM.systemAccessModal.classList.contains('hidden')) {
+                    SystemAccessModal.close();
+                    return;
+                }
                 this.closeUserDropdown();
                 this.closeLoginModal();
             }
@@ -777,6 +788,52 @@ const AuthController = {
 };
 
 // ============================================================================
+// SYSTEM ACCESS MODAL (OFES / future integrated systems)
+// ============================================================================
+
+const SystemAccessModal = {
+    init() {
+        const close = () => this.close();
+        DOM.closeSystemAccessModal?.addEventListener('click', close);
+        DOM.systemAccessModalOk?.addEventListener('click', close);
+        DOM.systemAccessModal?.addEventListener('click', (e) => {
+            if (e.target === DOM.systemAccessModal) close();
+        });
+    },
+
+    close() {
+        DOM.systemAccessModal?.classList.add('hidden');
+        DOM.systemAccessModal?.classList.remove('flex');
+        document.body.style.overflow = '';
+    },
+
+    /**
+     * @param {string} systemName - e.g. "OFES"
+     * @param {string} code - server error code (e.g. ofes_email_not_registered)
+     * @param {string} message - full message from API or fallback
+     */
+    open(systemName, code, message) {
+        const titles = {
+            ofes_email_not_registered: 'No OFES account for this email',
+            ofes_role_not_eligible: 'This login path is not for your role',
+            ofes_account_inactive: 'OFES account inactive',
+            invalid_or_expired_token: 'Sign-in expired',
+            missing_id_token: 'Sign-in error',
+            network_error: 'Connection problem'
+        };
+        const title = titles[code] || `Cannot open ${systemName}`;
+        const body = message || 'Please contact MIS if you need access.';
+
+        if (DOM.systemAccessModalTitle) DOM.systemAccessModalTitle.textContent = title;
+        if (DOM.systemAccessModalBody) DOM.systemAccessModalBody.textContent = body;
+
+        DOM.systemAccessModal?.classList.remove('hidden');
+        DOM.systemAccessModal?.classList.add('flex');
+        document.body.style.overflow = 'hidden';
+    }
+};
+
+// ============================================================================
 // SYSTEM CARDS CONTROLLER
 // ============================================================================
 
@@ -872,21 +929,38 @@ const SystemController = {
                 const idToken = await auth.currentUser.getIdToken(true);
                 await loadingPromise;
 
-                const form = document.createElement('form');
-                form.method = 'POST';
-                form.action = OFES_AUTH_URL;
+                const response = await fetch(OFES_AUTH_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Accept: 'application/json'
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify({ idToken })
+                });
 
-                const input = document.createElement('input');
-                input.type = 'hidden';
-                input.name = 'idToken';
-                input.value = idToken;
+                const data = await response.json().catch(() => ({}));
+                this.hideLoadingOverlay();
 
-                form.appendChild(input);
-                document.body.appendChild(form);
-                form.submit();
+                if (response.ok && data.redirect) {
+                    window.location.href = data.redirect;
+                    return;
+                }
+
+                const code = data.code || '';
+                const msg =
+                    data.message ||
+                    (response.status === 403
+                        ? 'Access was denied for OFES.'
+                        : 'Could not open OFES. Try again or contact MIS.');
+                SystemAccessModal.open('OFES', code, msg);
             } catch (error) {
                 this.hideLoadingOverlay();
-                ToastController.show('error', 'Access Denied', error.message || 'Your account is not authorized for OFES.');
+                SystemAccessModal.open(
+                    'OFES',
+                    'network_error',
+                    error.message || 'Could not reach OFES. Check your connection and try again.'
+                );
             }
 
             return;
@@ -1128,6 +1202,45 @@ const KeyboardController = {
 // ============================================================================
 
 /**
+ * OFES verify.php links "Back to MyCSU" with ?ofes=... so users get a clear toast after access issues.
+ */
+function consumeOfesQueryToast() {
+    const params = new URLSearchParams(window.location.search);
+    const ofes = params.get('ofes');
+    if (!ofes) return;
+
+    const map = {
+        not_registered: {
+            title: 'No OFES account',
+            message: 'Your Google email is not in OFES yet. Ask MIS to add your official @csu.edu.ph address to OFES, then try Open System again.'
+        },
+        wrong_role: {
+            title: 'OFES role',
+            message: 'Your OFES role does not use the staff shortcut from MyCSU. Use the OFES website login, or contact MIS if you need a different role.'
+        },
+        inactive: {
+            title: 'OFES account inactive',
+            message: 'Your OFES account is deactivated. Contact MIS to reactivate it.'
+        },
+        session: {
+            title: 'Session expired',
+            message: 'Your sign-in could not be verified for OFES. Sign out of MyCSU and sign in again, then try Open System.'
+        },
+        error: {
+            title: 'OFES',
+            message: 'Something went wrong connecting to OFES. Try again or contact MIS.'
+        }
+    };
+    const entry = map[ofes] || map.error;
+    ToastController.show('warning', entry.title, entry.message);
+
+    params.delete('ofes');
+    const qs = params.toString();
+    const clean = window.location.pathname + (qs ? '?' + qs : '') + window.location.hash;
+    window.history.replaceState({}, '', clean);
+}
+
+/**
  * Initialize all controllers when DOM is ready
  */
 function initializeApp() {
@@ -1141,6 +1254,9 @@ function initializeApp() {
     UpdatesController.init();
     ToastController.init();
     KeyboardController.init();
+    SystemAccessModal.init();
+
+    consumeOfesQueryToast();
 
     // Firebase auth state observer
     if (auth) {
@@ -1180,5 +1296,6 @@ window.MyCSU = {
     AppState,
     AuthController,
     ToastController,
+    SystemAccessModal,
     version: '2.0.0'
 };
