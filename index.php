@@ -13,6 +13,7 @@ $assetHost = (strpos($_SERVER['HTTP_HOST'] ?? '', 'csu.edu.ph') !== false)
 		content="MyCSU - Your unified gateway to Cagayan State University digital systems. Access HRIS, OFES, E2E and more.">
 	<meta name="theme-color" content="#800000">
 	<title>MyCSU — Unified University Portal</title>
+	<link rel="icon" type="image/x-icon" href="public/favicon.ico">
 
 	<!-- Preconnect for performance -->
 	<link rel="preconnect" href="https://fonts.googleapis.com">

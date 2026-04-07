@@ -706,8 +706,10 @@ const AuthController = {
         if (DOM.dropdownUserEmail) DOM.dropdownUserEmail.textContent = user.email;
         if (DOM.userAvatar && user.photoURL) DOM.userAvatar.src = user.photoURL;
 
-        // Enable system buttons
+        // Enable system buttons (skip inactive systems)
+        const inactiveSystems = ['HRIS', 'E2E'];
         DOM.systemButtons.forEach(btn => {
+            if (inactiveSystems.includes(btn.dataset.system)) return;
             btn.disabled = false;
             btn.classList.remove('bg-slate-100', 'text-slate-400');
             btn.classList.add('bg-maroon-800', 'text-white', 'hover:bg-maroon-900', 'shadow-lg', 'shadow-maroon-800/20');
