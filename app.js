@@ -25,11 +25,13 @@ const firebaseConfig = {
 };
 
 // System endpoints — auto-detect production vs local dev
+// Match index.php: any *.csu.edu.ph host is production (not only exact login.csu.edu.ph).
 function getBaseUrl(system) {
-    const isProd = window.location.hostname === 'login.csu.edu.ph';
+    const hostname = window.location.hostname || '';
+    const isProd = hostname.includes('csu.edu.ph');
     const bases = {
         hris: isProd ? 'https://hris.csu.edu.ph' : 'http://localhost/hris.csu.edu.ph',
-        ofes: 'https://ofes.csu.edu.ph',
+        ofes: isProd ? 'https://ofes.csu.edu.ph' : 'http://localhost/ofes'
     };
     return bases[system] || '';
 }
