@@ -35,6 +35,7 @@ $assetHost = (strpos($_SERVER['HTTP_HOST'] ?? '', 'csu.edu.ph') !== false)
 	<!-- Firebase SDK -->
 	<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 	<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+	<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 
 	<!-- Tailwind Configuration -->
 	<script>
@@ -414,6 +415,11 @@ $assetHost = (strpos($_SERVER['HTTP_HOST'] ?? '', 'csu.edu.ph') !== false)
 									role="menuitem">
 									<i class="fas fa-question-circle w-4 text-center opacity-60"></i>Help & Support
 								</a>
+								<a id="adminPortalLink" href="admin/"
+									class="hidden flex items-center gap-3 px-4 py-2.5 text-sm text-maroon-800 font-semibold hover:bg-maroon-50 transition-colors"
+									role="menuitem">
+									<i class="fas fa-shield-halved w-4 text-center"></i>Admin Portal
+								</a>
 							</div>
 							<div class="border-t border-slate-100 pt-2 mt-1">
 								<button id="logoutBtn"
@@ -578,6 +584,24 @@ $assetHost = (strpos($_SERVER['HTTP_HOST'] ?? '', 'csu.edu.ph') !== false)
 					class="prompt-login-btn whitespace-nowrap px-6 py-2.5 bg-maroon-800 text-white rounded-xl font-medium hover:bg-maroon-900 transition-colors focus-ring">
 					Sign In Now <i class="fas fa-arrow-right ml-2"></i>
 				</button>
+			</div>
+
+			<!-- Pending User Banner (shown after login when account is not yet approved) -->
+			<div id="pendingUserBanner"
+				class="hidden mb-10 p-5 bg-gradient-to-r from-amber-50 to-gold-50 border border-amber-200 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+				<div class="flex items-center gap-4">
+					<div class="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center flex-shrink-0">
+						<i class="fas fa-clock text-amber-600 text-xl"></i>
+					</div>
+					<div>
+						<h4 class="font-semibold text-slate-800">Account Pending Approval</h4>
+						<p class="text-sm text-slate-600" data-pending-message>Your account is not yet registered in any system. Please contact MIS for access.</p>
+					</div>
+				</div>
+				<a href="mailto:mis@csu.edu.ph"
+					class="whitespace-nowrap px-6 py-2.5 bg-amber-600 text-white rounded-xl font-medium hover:bg-amber-700 transition-colors focus-ring">
+					<i class="fas fa-envelope mr-2"></i>Contact MIS
+				</a>
 			</div>
 
 			<!-- System Cards Grid -->

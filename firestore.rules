@@ -1,0 +1,96 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    function isCsuEmail() {
+      return request.auth != null
+          && request.auth.token.email.matches('.*@csu\\.edu\\.ph');
+    }
+
+    function isAdmin() {
+      return isCsuEmail()
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'mis_admin';
+    }
+
+    // -----------------------------------------------------------------------
+    // users/{uid}
+    //   - Owner reads own doc
+    //   - MIS admin reads/writes all
+    //   - Authenticated @csu.edu.ph user may create their own doc (onboarding)
+    // -----------------------------------------------------------------------
+    match /users/{uid} {
+      allow read:   if request.auth != null
+                      && (request.auth.uid == uid || isAdmin());
+      allow create: if isCsuEmail()
+                      && request.auth.uid == uid
+                      && request.resource.data.keys().hasAll(['email','status','role','createdAt'])
+                      && request.resource.data.role == 'user'
+                      && request.resource.data.status == 'pending';
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------------
+    // systems/{systemId}
+    //   - Any authenticated @csu.edu.ph user can read
+    //   - Only MIS admin writes
+    // -----------------------------------------------------------------------
+    match /systems/{systemId} {
+      allow read:  if isCsuEmail();
+      allow write: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------------
+    // roles/{roleId}
+    //   - Any authenticated @csu.edu.ph user can read
+    //   - Only MIS admin writes
+    // -----------------------------------------------------------------------
+    match /roles/{roleId} {
+      allow read:  if isCsuEmail();
+      allow write: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------------
+    // system_roles/{docId}
+    //   - Any authenticated @csu.edu.ph user can read
+    //   - Only MIS admin writes
+    // -----------------------------------------------------------------------
+    match /system_roles/{docId} {
+      allow read:  if isCsuEmail();
+      allow write: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------------
+    // user_access/{docId}
+    //   - User reads docs where userId matches their UID
+    //   - MIS admin reads/writes all
+    // -----------------------------------------------------------------------
+    match /user_access/{docId} {
+      allow read:   if request.auth != null
+                      && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------------
+    // logs/{logId}
+    //   - Authenticated @csu.edu.ph users can create logs (append-only)
+    //   - MIS admin can read
+    //   - No one updates or deletes (immutable audit trail)
+    // -----------------------------------------------------------------------
+    match /logs/{logId} {
+      allow create: if isCsuEmail()
+                      && request.resource.data.keys().hasAll(['userId','email','action','timestamp'])
+                      && request.resource.data.userId == request.auth.uid;
+      allow read:   if isAdmin();
+      allow update: if false;
+      allow delete: if false;
+    }
+  }
+}

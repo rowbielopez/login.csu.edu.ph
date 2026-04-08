@@ -4,14 +4,15 @@ DirectoryIndex index.php
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteBase /
+    # No RewriteBase set — Apache uses the directory's own path as base,
+    # which is correct for both:
+    #   - localhost/mycsu/  (local dev, base = /mycsu/)
+    #   - login.csu.edu.ph/ (production root, base = /)
 
     # Redirect direct HTML access to PHP entry
     RewriteCond %{THE_REQUEST} \s/+index\.html\s [NC]
     RewriteRule ^index\.html$ index.php [R=301,L]
-
-    # Fallback to index.php for root
-    RewriteRule ^$ index.php [L]
+    # DirectoryIndex above already serves index.php for bare directory requests.
 </IfModule>
 
 <IfModule mod_headers.c>

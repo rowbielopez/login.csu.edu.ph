@@ -42,16 +42,22 @@ const OFES_AUTH_URL = getBaseUrl('ofes') + '/api/auth/verify.php';
 
 // Initialize Firebase
 let auth = null;
+let db = null;
 try {
     if (typeof firebase !== 'undefined') {
         if (!firebase.apps.length) {
             firebase.initializeApp(firebaseConfig);
         }
         auth = firebase.auth();
+        db = firebase.firestore();
     }
 } catch (error) {
     console.warn('[Auth] Firebase initialization failed:', error);
 }
+
+// Firestore server timestamp helper
+const serverTimestamp = () =>
+    typeof firebase !== 'undefined' ? firebase.firestore.FieldValue.serverTimestamp() : new Date();
 
 // ============================================================================
 // APPLICATION STATE
@@ -66,7 +72,11 @@ const AppState = {
     isNavScrolled: false,
     isMobileMenuOpen: false,
     isUserDropdownOpen: false,
-    activeFilter: 'all'
+    activeFilter: 'all',
+    // Firestore-backed user state
+    userStatus: null,        // 'active' | 'pending' | 'rejected' | null
+    userFirestoreRole: null, // 'mis_admin' | 'user' | null
+    userAccessMap: {}        // { [systemId]: { roleId, roleName } }
 };
 
 // ============================================================================
@@ -640,17 +650,27 @@ const AuthController = {
 
             const credential = await auth.signInWithPopup(provider);
             const user = credential.user;
+
+            // --- Email domain enforcement ---
+            if (!user.email || !user.email.toLowerCase().endsWith('@csu.edu.ph')) {
+                await auth.signOut();
+                ToastController.show('error', 'Access Restricted', 'Only @csu.edu.ph institutional emails are allowed.');
+                return;
+            }
+
             const displayName = user.displayName || user.email?.split('@')[0]?.replace(/[._-]/g, ' ') || 'User';
             const userProfile = {
                 displayName: displayName.charAt(0).toUpperCase() + displayName.slice(1),
                 email: user.email,
+                uid: user.uid,
                 role: 'User',
                 photoURL: user.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=800000&color=fff&size=128&bold=true`
             };
-            this.updateUIForLoggedInUser(userProfile);
+
             this.closeLoginModal();
 
-            ToastController.show('success', 'Signed In', 'You can now open available systems from the Systems section.');
+            // --- Firestore user onboarding ---
+            await this.resolveFirestoreUser(user, userProfile);
         } catch (error) {
             console.error('Login error:', error);
             ToastController.show('error', 'Login Failed', error.message || 'Unable to sign in.');
@@ -661,6 +681,173 @@ const AuthController = {
         } finally {
             this.setGoogleLoading(false);
         }
+    },
+
+    /**
+     * Check Firestore for the user doc; create a pending doc if absent.
+     * Then apply the appropriate UI state.
+     */
+    async resolveFirestoreUser(firebaseUser, userProfile) {
+        // Apply logged-in shell UI immediately to avoid sign-in flicker while
+        // Firestore reads resolve on refresh/session restore.
+        this.updateUIForLoggedInUser(userProfile);
+
+        if (!db) {
+            // Firestore unavailable — fall back to basic logged-in UI
+            ToastController.show('success', 'Signed In', 'You can now open available systems from the Systems section.');
+            return;
+        }
+
+        try {
+            const userRef = db.collection('users').doc(firebaseUser.uid);
+            const normalizedEmail = (firebaseUser.email || '').toLowerCase().trim();
+            const userSnap = await userRef.get();
+
+            let resolvedUserData = null;
+
+            if (!userSnap.exists) {
+                // First visit — create UID-bound pending doc.
+                // We intentionally avoid cross-email queries here because Firestore rules
+                // only allow non-admin users to read/write their own UID document.
+                resolvedUserData = {
+                    email: normalizedEmail || firebaseUser.email,
+                    displayName: userProfile.displayName,
+                    photoURL: userProfile.photoURL,
+                    status: 'pending',
+                    role: 'user',
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                    assignedSystems: []
+                };
+                await userRef.set(resolvedUserData);
+            } else {
+                resolvedUserData = userSnap.data() || {};
+            }
+
+            const rawStatus = String(resolvedUserData.status || 'pending').trim().toLowerCase();
+            const rawRole = String(resolvedUserData.role || 'user').trim().toLowerCase();
+
+            const normalizedStatus =
+                rawStatus === '1' || rawStatus === 'approved' ? 'active'
+                : rawStatus === '0' || rawStatus === 'for_approval' || rawStatus === 'awaiting_approval' ? 'pending'
+                : rawStatus;
+
+            AppState.userStatus = normalizedStatus;
+            AppState.userFirestoreRole = rawRole;
+            AppState.userAccessMap = {};
+
+            if (AppState.userStatus === 'active') {
+                // Load user_access records
+                const accessSnap = await db.collection('user_access')
+                    .where('userId', '==', firebaseUser.uid)
+                    .get();
+                const accessMap = {};
+                accessSnap.forEach(doc => {
+                    const d = doc.data();
+                        const systemId = d.systemId;
+                        if (!systemId) return;
+                        accessMap[systemId] = {
+                            roleId: d.systemRoleKey || d.roleId || '',
+                            roleName: d.systemRoleName || d.roleName || '',
+                            canonicalRole: d.canonicalRole || '',
+                            externalRoleValue: d.externalRoleValue || ''
+                        };
+                });
+                AppState.userAccessMap = accessMap;
+            }
+
+            // Re-apply UI so role-dependent elements (e.g. admin link) reflect
+            // the resolved Firestore role/state.
+            this.updateUIForLoggedInUser(userProfile);
+
+            if (AppState.userStatus === 'pending') {
+                this.showPendingUserBanner();
+                LoggingController.logEvent('login', null, { status: 'pending' });
+            } else if (AppState.userStatus === 'active') {
+                this.applySystemAccessFromFirestore();
+                LoggingController.logEvent('login', null, { status: 'active', role: AppState.userFirestoreRole });
+                ToastController.show('success', 'Signed In', 'Welcome back! Your accessible systems are now available.');
+            } else {
+                // rejected or unknown
+                this.showPendingUserBanner('Your account access has been revoked. Please contact MIS.', false);
+                LoggingController.logEvent('login', null, { status: AppState.userStatus });
+            }
+        } catch (err) {
+            console.error('[Auth] Firestore user resolve failed:', err);
+            // Degrade gracefully — show regular logged-in state without access gating
+            this.updateUIForLoggedInUser(userProfile);
+            ToastController.show('warning', 'Signed In', 'Could not verify system access. Contact MIS if systems are unavailable.');
+        }
+    },
+
+    /**
+     * Show the pending/restricted user banner and disable all system cards.
+     */
+    canOpenViaExistingSystemRecord(systemId) {
+        const normalized = String(systemId || '').toUpperCase();
+        return normalized === 'HRIS' || normalized === 'OFES';
+    },
+
+    showPendingUserBanner(message = null, allowDirectSystemFallback = true) {
+        const banner = document.getElementById('pendingUserBanner');
+        if (banner) {
+            if (message) {
+                const msgEl = banner.querySelector('[data-pending-message]');
+                if (msgEl) msgEl.textContent = message;
+            } else {
+                const msgEl = banner.querySelector('[data-pending-message]');
+                if (msgEl) {
+                    msgEl.textContent = 'Your MyCSU account is pending, but you may still open integrated systems where your email already exists.';
+                }
+            }
+            banner.classList.remove('hidden');
+        }
+        // Keep integrated systems openable (HRIS/OFES) so existing system records can pass through.
+        DOM.systemButtons.forEach(btn => {
+            const systemId = btn.dataset.system;
+            const allowDirect = allowDirectSystemFallback && this.canOpenViaExistingSystemRecord(systemId);
+
+            if (allowDirect) {
+                btn.disabled = false;
+                btn.classList.remove('bg-slate-100', 'text-slate-400');
+                btn.classList.add('bg-maroon-800', 'text-white', 'hover:bg-maroon-900', 'shadow-lg', 'shadow-maroon-800/20');
+                btn.innerHTML = '<i class="fas fa-external-link-alt mr-2"></i>Open System';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.classList.add('bg-slate-100', 'text-slate-400');
+            btn.classList.remove('bg-maroon-800', 'text-white', 'hover:bg-maroon-900', 'shadow-lg', 'shadow-maroon-800/20');
+            btn.innerHTML = '<i class="fas fa-clock mr-2 opacity-60"></i>Pending Approval';
+        });
+    },
+
+    /**
+     * Enable only the system cards the user has been granted access to in Firestore.
+     */
+    applySystemAccessFromFirestore() {
+        const accessMap = AppState.userAccessMap;
+        // MIS admins get access to everything
+        const isMisAdmin = AppState.userFirestoreRole === 'mis_admin';
+
+        DOM.systemButtons.forEach(btn => {
+            const systemId = btn.dataset.system;
+            const hasAccess = isMisAdmin
+                || (systemId && accessMap[systemId])
+                || this.canOpenViaExistingSystemRecord(systemId);
+
+            if (hasAccess) {
+                btn.disabled = false;
+                btn.classList.remove('bg-slate-100', 'text-slate-400');
+                btn.classList.add('bg-maroon-800', 'text-white', 'hover:bg-maroon-900', 'shadow-lg', 'shadow-maroon-800/20');
+                btn.innerHTML = '<i class="fas fa-external-link-alt mr-2"></i>Open System';
+            } else {
+                btn.disabled = true;
+                btn.classList.add('bg-slate-100', 'text-slate-400');
+                btn.classList.remove('bg-maroon-800', 'text-white', 'hover:bg-maroon-900', 'shadow-lg', 'shadow-maroon-800/20');
+                btn.innerHTML = '<i class="fas fa-lock mr-2 opacity-60"></i>No Access';
+            }
+        });
     },
 
     async authorizeWithHRIS(idToken) {
@@ -690,18 +877,20 @@ const AuthController = {
             return;
         }
 
-        auth.signOut()
-            .then(() => {
-                this.updateUIForLoggedOutUser();
-                ToastController.show('info', 'Signed Out', 'You have been logged out successfully.');
-            })
-            .catch((error) => {
-                console.error('Logout error:', error);
-            });
+        LoggingController.logEvent('logout').finally(() => {
+            auth.signOut()
+                .then(() => {
+                    this.updateUIForLoggedOutUser();
+                    ToastController.show('info', 'Signed Out', 'You have been logged out successfully.');
+                })
+                .catch((error) => {
+                    console.error('Logout error:', error);
+                });
+        });
     },
 
     /**
-     * Update UI for logged in state
+     * Update UI for logged in state (base visibility only — access gating is separate)
      */
     updateUIForLoggedInUser(user) {
         AppState.isLoggedIn = true;
@@ -712,22 +901,18 @@ const AuthController = {
         DOM.userMenu?.classList.remove('hidden');
         DOM.loginPromptBanner?.classList.add('hidden');
 
+        // Show admin portal link if MIS admin
+        const adminLink = document.getElementById('adminPortalLink');
+        if (adminLink && AppState.userFirestoreRole === 'mis_admin') {
+            adminLink.classList.remove('hidden');
+        }
+
         // Update user info displays
         if (DOM.userName) DOM.userName.textContent = user.displayName;
         if (DOM.userRole) DOM.userRole.textContent = user.role || 'User';
         if (DOM.dropdownUserName) DOM.dropdownUserName.textContent = user.displayName;
         if (DOM.dropdownUserEmail) DOM.dropdownUserEmail.textContent = user.email;
         if (DOM.userAvatar && user.photoURL) DOM.userAvatar.src = user.photoURL;
-
-        // Enable system buttons (skip inactive systems)
-        const inactiveSystems = ['HRIS', 'E2E'];
-        DOM.systemButtons.forEach(btn => {
-            if (inactiveSystems.includes(btn.dataset.system)) return;
-            btn.disabled = false;
-            btn.classList.remove('bg-slate-100', 'text-slate-400');
-            btn.classList.add('bg-maroon-800', 'text-white', 'hover:bg-maroon-900', 'shadow-lg', 'shadow-maroon-800/20');
-            btn.innerHTML = '<i class="fas fa-external-link-alt mr-2"></i>Open System';
-        });
 
         console.log('[Auth] User logged in:', user.displayName);
         this.updateLoginModalState();
@@ -742,16 +927,27 @@ const AuthController = {
         AppState.hrisAuthorized = false;
         AppState.hrisIsAdmin = false;
         AppState.hrisRole = null;
+        AppState.userStatus = null;
+        AppState.userFirestoreRole = null;
+        AppState.userAccessMap = {};
 
         // Toggle visibility
         DOM.loginBtn?.classList.remove('hidden');
         DOM.userMenu?.classList.add('hidden');
         DOM.loginPromptBanner?.classList.remove('hidden');
 
+        // Hide admin portal link
+        const adminLink = document.getElementById('adminPortalLink');
+        if (adminLink) adminLink.classList.add('hidden');
+
+        // Hide pending banner
+        const banner = document.getElementById('pendingUserBanner');
+        if (banner) banner.classList.add('hidden');
+
         // Close dropdown
         this.closeUserDropdown();
 
-        // Disable system buttons
+        // Reset system buttons
         DOM.systemButtons.forEach(btn => {
             btn.disabled = true;
             btn.classList.add('bg-slate-100', 'text-slate-400');
@@ -878,6 +1074,20 @@ const SystemController = {
 
         if (!systemName) return;
 
+        // Firestore access gate
+        const isMisAdmin = AppState.userFirestoreRole === 'mis_admin';
+        const hasAccess = isMisAdmin || AppState.userAccessMap[systemName];
+        const canDirectCheck = AuthController.canOpenViaExistingSystemRecord(systemName);
+        if (!hasAccess && AppState.userStatus !== null && !canDirectCheck) {
+            LoggingController.logEvent('access_denied', systemName);
+            SystemAccessModal.open(
+                systemName,
+                'access_denied',
+                `You do not have access to ${systemName}. Please contact MIS to request access.`
+            );
+            return;
+        }
+
         // System URLs mapping (configure for production)
         const systemUrls = {
             'HRIS': AppState.hrisIsAdmin ? HRIS_ADMIN_URL : HRIS_DASHBOARD_URL,
@@ -909,6 +1119,7 @@ const SystemController = {
                 form.appendChild(input);
                 document.body.appendChild(form);
 
+                LoggingController.logEvent('system_access', 'HRIS');
                 form.submit();
             } catch (error) {
                 this.hideLoadingOverlay();
@@ -939,20 +1150,32 @@ const SystemController = {
                     body: JSON.stringify({ idToken })
                 });
 
-                const data = await response.json().catch(() => ({}));
+                const rawBody = await response.text();
+                let data = {};
+                try {
+                    data = rawBody ? JSON.parse(rawBody) : {};
+                } catch {
+                    data = {};
+                }
                 this.hideLoadingOverlay();
 
                 if (response.ok && data.redirect) {
+                    LoggingController.logEvent('system_access', 'OFES');
                     window.location.href = data.redirect;
                     return;
                 }
 
                 const code = data.code || '';
+                const bodySnippet = rawBody
+                    ? rawBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 220)
+                    : '';
                 const msg =
                     data.message ||
                     (response.status === 403
                         ? 'Access was denied for OFES.'
-                        : 'Could not open OFES. Try again or contact MIS.');
+                        : bodySnippet
+                            ? `OFES response (${response.status}): ${bodySnippet}`
+                            : `Could not open OFES. Try again or contact MIS. (HTTP ${response.status})`);
                 SystemAccessModal.open('OFES', code, msg);
             } catch (error) {
                 this.hideLoadingOverlay();
@@ -970,6 +1193,38 @@ const SystemController = {
         if (systemUrls[systemName]) {
             window.location.href = systemUrls[systemName];
         }
+    }
+};
+
+// ============================================================================
+// LOGGING CONTROLLER
+// ============================================================================
+
+const LoggingController = {
+    /**
+     * Write an event to the Firestore logs collection.
+     * Silently fails — logging must never interrupt the user flow.
+     *
+     * @param {string} action  - e.g. 'login', 'logout', 'system_access', 'access_denied'
+     * @param {string|null} systemId  - Firestore system doc ID or data-system value, null if N/A
+     * @param {Object} metadata  - optional additional details
+     */
+    logEvent(action, systemId = null, metadata = {}) {
+        if (!db || !auth?.currentUser) return Promise.resolve();
+
+        const user = auth.currentUser;
+        const entry = {
+            userId: user.uid,
+            email: user.email || '',
+            action,
+            systemId: systemId || null,
+            timestamp: serverTimestamp(),
+            metadata
+        };
+
+        return db.collection('logs').add(entry).catch(err => {
+            console.warn('[Log] Failed to write log entry:', err);
+        });
     }
 };
 
@@ -1260,15 +1515,23 @@ function initializeApp() {
 
     // Firebase auth state observer
     if (auth) {
-        auth.onAuthStateChanged((user) => {
+        auth.onAuthStateChanged(async (user) => {
             if (user) {
+                // Reject non-CSU emails silently on session restore
+                if (!user.email || !user.email.toLowerCase().endsWith('@csu.edu.ph')) {
+                    await auth.signOut();
+                    AuthController.updateUIForLoggedOutUser();
+                    return;
+                }
                 const displayName = user.displayName || user.email?.split('@')[0] || 'User';
-                AuthController.updateUIForLoggedInUser({
-                    displayName,
+                const userProfile = {
+                    displayName: displayName.charAt(0).toUpperCase() + displayName.slice(1),
                     email: user.email,
+                    uid: user.uid,
                     role: 'User',
                     photoURL: user.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=800000&color=fff&size=128&bold=true`
-                });
+                };
+                await AuthController.resolveFirestoreUser(user, userProfile);
             } else {
                 AuthController.updateUIForLoggedOutUser();
             }
@@ -1295,7 +1558,8 @@ if (document.readyState === 'loading') {
 window.MyCSU = {
     AppState,
     AuthController,
+    LoggingController,
     ToastController,
     SystemAccessModal,
-    version: '2.0.0'
+    version: '2.1.0'
 };
