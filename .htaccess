@@ -12,6 +12,10 @@ DirectoryIndex index.php
     # Redirect direct HTML access to PHP entry
     RewriteCond %{THE_REQUEST} \s/+index\.html\s [NC]
     RewriteRule ^index\.html$ index.php [R=301,L]
+
+    # Ensure Admin Portal works via /admin as well as /admin/
+    RewriteRule ^admin/?$ admin/index.php [L]
+
     # DirectoryIndex above already serves index.php for bare directory requests.
 </IfModule>
 
