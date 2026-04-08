@@ -1055,6 +1055,7 @@ const SystemAccessModal = {
             ofes_email_not_registered: 'No OFES account for this email',
             ofes_role_not_eligible: 'This login path is not for your role',
             ofes_account_inactive: 'OFES account inactive',
+            ofes_access_revoked: 'Access revoked',
             invalid_or_expired_token: 'Sign-in expired',
             missing_id_token: 'Sign-in error',
             network_error: 'Connection problem',
@@ -1624,6 +1625,10 @@ function consumeOfesQueryToast() {
         inactive: {
             title: 'OFES account inactive',
             message: 'Your OFES account is deactivated. Contact MIS to reactivate it.'
+        },
+        revoked: {
+            title: 'OFES access revoked',
+            message: 'Your OFES access was revoked in MyCSU. Contact MIS if you think this is a mistake.'
         },
         session: {
             title: 'Session expired',
