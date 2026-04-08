@@ -76,7 +76,9 @@ const AppState = {
     // Firestore-backed user state
     userStatus: null,        // 'active' | 'pending' | 'rejected' | null
     userFirestoreRole: null, // 'mis_admin' | 'user' | null
-    userAccessMap: {}        // { [systemId]: { roleId, roleName } }
+    userAccessMap: {},       // { [systemId]: { roleId, roleName } }
+    userRevokedSystems: {},  // { [systemId]: true }
+    systemStatusMap: {}      // { [systemId]: 'active' | 'inactive' }
 };
 
 // ============================================================================
@@ -735,26 +737,38 @@ const AuthController = {
             AppState.userStatus = normalizedStatus;
             AppState.userFirestoreRole = rawRole;
             AppState.userAccessMap = {};
+            AppState.userRevokedSystems = {};
 
-            if (AppState.userStatus === 'active') {
-                // Load user_access records
-                const accessSnap = await db.collection('user_access')
-                    .where('userId', '==', firebaseUser.uid)
-                    .get();
-                const accessMap = {};
-                accessSnap.forEach(doc => {
-                    const d = doc.data();
-                        const systemId = d.systemId;
-                        if (!systemId) return;
-                        accessMap[systemId] = {
-                            roleId: d.systemRoleKey || d.roleId || '',
-                            roleName: d.systemRoleName || d.roleName || '',
-                            canonicalRole: d.canonicalRole || '',
-                            externalRoleValue: d.externalRoleValue || ''
-                        };
-                });
-                AppState.userAccessMap = accessMap;
-            }
+            // Load user_access records to enforce revocations even when
+            // a user can be opened via system-side existing account fallback.
+            const accessSnap = await db.collection('user_access')
+                .where('userId', '==', firebaseUser.uid)
+                .get();
+            const accessMap = {};
+            const revokedMap = {};
+            accessSnap.forEach(doc => {
+                const d = doc.data();
+                const systemId = d.systemId;
+                if (!systemId) return;
+
+                const accessStatus = String(d.status || 'active').trim().toLowerCase();
+                const isRevoked = accessStatus === 'revoked' || accessStatus === 'inactive' || accessStatus === 'disabled';
+                if (isRevoked) {
+                    revokedMap[systemId] = true;
+                    return;
+                }
+
+                if (AppState.userStatus === 'active') {
+                    accessMap[systemId] = {
+                        roleId: d.systemRoleKey || d.roleId || '',
+                        roleName: d.systemRoleName || d.roleName || '',
+                        canonicalRole: d.canonicalRole || '',
+                        externalRoleValue: d.externalRoleValue || ''
+                    };
+                }
+            });
+            AppState.userAccessMap = accessMap;
+            AppState.userRevokedSystems = revokedMap;
 
             // Re-apply UI so role-dependent elements (e.g. admin link) reflect
             // the resolved Firestore role/state.
@@ -788,6 +802,20 @@ const AuthController = {
         return normalized === 'HRIS' || normalized === 'OFES';
     },
 
+    isSystemEnabled(systemId) {
+        const normalized = String(systemId || '').toUpperCase();
+        if (!normalized) return true;
+
+        const status = String(AppState.systemStatusMap[normalized] || '').trim().toLowerCase();
+        return status === '' || status === 'active';
+    },
+
+    isSystemRevoked(systemId) {
+        const normalized = String(systemId || '').toUpperCase();
+        if (!normalized) return false;
+        return !!AppState.userRevokedSystems[normalized];
+    },
+
     showPendingUserBanner(message = null, allowDirectSystemFallback = true) {
         const banner = document.getElementById('pendingUserBanner');
         if (banner) {
@@ -805,7 +833,10 @@ const AuthController = {
         // Keep integrated systems openable (HRIS/OFES) so existing system records can pass through.
         DOM.systemButtons.forEach(btn => {
             const systemId = btn.dataset.system;
-            const allowDirect = allowDirectSystemFallback && this.canOpenViaExistingSystemRecord(systemId);
+            const allowDirect = allowDirectSystemFallback
+                && this.canOpenViaExistingSystemRecord(systemId)
+                && this.isSystemEnabled(systemId)
+                && !this.isSystemRevoked(systemId);
 
             if (allowDirect) {
                 btn.disabled = false;
@@ -832,11 +863,15 @@ const AuthController = {
 
         DOM.systemButtons.forEach(btn => {
             const systemId = btn.dataset.system;
+            const isSystemActive = this.isSystemEnabled(systemId);
+            const isRevoked = this.isSystemRevoked(systemId);
+            const allowByExistingSystemRecord = this.canOpenViaExistingSystemRecord(systemId) && !isRevoked;
             const hasAccess = isMisAdmin
                 || (systemId && accessMap[systemId])
-                || this.canOpenViaExistingSystemRecord(systemId);
+                || allowByExistingSystemRecord;
+            const canOpen = hasAccess && isSystemActive;
 
-            if (hasAccess) {
+            if (canOpen) {
                 btn.disabled = false;
                 btn.classList.remove('bg-slate-100', 'text-slate-400');
                 btn.classList.add('bg-maroon-800', 'text-white', 'hover:bg-maroon-900', 'shadow-lg', 'shadow-maroon-800/20');
@@ -845,7 +880,13 @@ const AuthController = {
                 btn.disabled = true;
                 btn.classList.add('bg-slate-100', 'text-slate-400');
                 btn.classList.remove('bg-maroon-800', 'text-white', 'hover:bg-maroon-900', 'shadow-lg', 'shadow-maroon-800/20');
-                btn.innerHTML = '<i class="fas fa-lock mr-2 opacity-60"></i>No Access';
+                if (!isSystemActive) {
+                    btn.innerHTML = '<i class="fas fa-circle-pause mr-2 opacity-70"></i>System Inactive';
+                } else if (isRevoked) {
+                    btn.innerHTML = '<i class="fas fa-ban mr-2 opacity-70"></i>Access Revoked';
+                } else {
+                    btn.innerHTML = '<i class="fas fa-lock mr-2 opacity-60"></i>No Access';
+                }
             }
         });
     },
@@ -930,6 +971,7 @@ const AuthController = {
         AppState.userStatus = null;
         AppState.userFirestoreRole = null;
         AppState.userAccessMap = {};
+        AppState.userRevokedSystems = {};
 
         // Toggle visibility
         DOM.loginBtn?.classList.remove('hidden');
@@ -1015,7 +1057,9 @@ const SystemAccessModal = {
             ofes_account_inactive: 'OFES account inactive',
             invalid_or_expired_token: 'Sign-in expired',
             missing_id_token: 'Sign-in error',
-            network_error: 'Connection problem'
+            network_error: 'Connection problem',
+            system_inactive: 'System inactive',
+            access_revoked: 'Access revoked'
         };
         const title = titles[code] || `Cannot open ${systemName}`;
         const body = message || 'Please contact MIS if you need access.';
@@ -1073,6 +1117,26 @@ const SystemController = {
         }
 
         if (!systemName) return;
+
+        if (!AuthController.isSystemEnabled(systemName)) {
+            LoggingController.logEvent('access_denied', systemName, { reason: 'system_inactive' });
+            SystemAccessModal.open(
+                systemName,
+                'system_inactive',
+                `${systemName} is currently inactive. Please contact MIS.`
+            );
+            return;
+        }
+
+        if (AuthController.isSystemRevoked(systemName)) {
+            LoggingController.logEvent('access_denied', systemName, { reason: 'access_revoked' });
+            SystemAccessModal.open(
+                systemName,
+                'access_revoked',
+                `Your access to ${systemName} has been revoked. Please contact MIS.`
+            );
+            return;
+        }
 
         // Firestore access gate
         const isMisAdmin = AppState.userFirestoreRole === 'mis_admin';
@@ -1225,6 +1289,53 @@ const LoggingController = {
         return db.collection('logs').add(entry).catch(err => {
             console.warn('[Log] Failed to write log entry:', err);
         });
+    }
+};
+
+// ============================================================================
+// SYSTEM STATUS CONTROLLER (Firestore systems collection)
+// ============================================================================
+
+const SystemStatusController = {
+    _unsub: null,
+
+    init() {
+        if (!db) return;
+
+        this._unsub = db.collection('systems').onSnapshot((snap) => {
+            const statusMap = {};
+            snap.forEach((doc) => {
+                const d = doc.data() || {};
+                const systemId = String(doc.id || d.name || '').toUpperCase();
+                if (!systemId) return;
+                statusMap[systemId] = String(d.status || 'active').trim().toLowerCase();
+            });
+
+            AppState.systemStatusMap = statusMap;
+
+            if (!AppState.isLoggedIn) return;
+
+            if (AppState.userStatus === 'pending') {
+                AuthController.showPendingUserBanner();
+                return;
+            }
+
+            if (AppState.userStatus === 'active') {
+                AuthController.applySystemAccessFromFirestore();
+                return;
+            }
+
+            if (AppState.userStatus) {
+                AuthController.showPendingUserBanner('Your account access has been revoked. Please contact MIS.', false);
+            }
+        }, (err) => {
+            console.warn('[Systems] status subscribe failed:', err);
+        });
+    },
+
+    destroy() {
+        this._unsub?.();
+        this._unsub = null;
     }
 };
 
@@ -1503,6 +1614,7 @@ function initializeApp() {
 
     // Initialize all controllers
     NavigationController.init();
+    SystemStatusController.init();
     AuthController.init();
     SystemController.init();
     AnnouncementsController.init();
@@ -1558,6 +1670,7 @@ if (document.readyState === 'loading') {
 window.MyCSU = {
     AppState,
     AuthController,
+    SystemStatusController,
     LoggingController,
     ToastController,
     SystemAccessModal,

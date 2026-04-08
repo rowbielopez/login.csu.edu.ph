@@ -722,10 +722,15 @@ const UserManagementController = {
             .where('userId', '==', uid)
             .get();
 
-        const entries = accessSnap.docs.map(doc => ({
-            _docId: doc.id,
-            ...doc.data()
-        }));
+        const entries = accessSnap.docs
+            .map(doc => ({
+                _docId: doc.id,
+                ...doc.data()
+            }))
+            .filter(entry => {
+                const status = String(entry.status || 'active').trim().toLowerCase();
+                return !['revoked', 'inactive', 'disabled'].includes(status);
+            });
 
         entries.sort((a, b) => String(a.systemId || '').localeCompare(String(b.systemId || '')));
         this._pendingUserAccess = entries;
@@ -784,13 +789,30 @@ const UserManagementController = {
                 .where('systemId', '==', systemId)
                 .get();
 
+            const batch = db.batch();
+
             if (matching.empty) {
-                AdminToast.show('warning', 'Not Found', 'No access record found for that system.');
-                return;
+                const fallbackDocId = `${uid}_${systemId}`;
+                const fallbackRef = db.collection('user_access').doc(fallbackDocId);
+                batch.set(fallbackRef, {
+                    userId: uid,
+                    systemId,
+                    status: 'revoked',
+                    revokedAt: serverTimestamp(),
+                    revokedBy: auth?.currentUser?.uid || null,
+                    updatedAt: serverTimestamp()
+                }, { merge: true });
+            } else {
+                matching.docs.forEach(doc => {
+                    batch.set(doc.ref, {
+                        status: 'revoked',
+                        revokedAt: serverTimestamp(),
+                        revokedBy: auth?.currentUser?.uid || null,
+                        updatedAt: serverTimestamp()
+                    }, { merge: true });
+                });
             }
 
-            const batch = db.batch();
-            matching.docs.forEach(doc => batch.delete(doc.ref));
             await batch.commit();
 
             await db.collection('users').doc(uid).update({
