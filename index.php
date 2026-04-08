@@ -621,9 +621,10 @@ $assetHost = (strpos($_SERVER['HTTP_HOST'] ?? '', 'csu.edu.ph') !== false)
 								<p class="text-sm text-slate-500 font-medium">Human Resource Information System</p>
 							</div>
 							<div
-								class="flex items-center gap-2 px-3 py-1.5 bg-slate-100 border border-slate-300 rounded-full">
-								<span class="relative inline-flex rounded-full h-2 w-2 bg-slate-400"></span>
-								<span class="text-xs font-semibold text-slate-500">Inactive</span>
+								class="flex items-center gap-2 px-3 py-1.5 bg-slate-100 border border-slate-300 rounded-full"
+								data-system-status>
+								<span class="relative inline-flex rounded-full h-2 w-2 bg-slate-400" data-system-status-dot></span>
+								<span class="text-xs font-semibold text-slate-500" data-system-status-text>Inactive</span>
 							</div>
 						</div>
 					</div>
@@ -669,11 +670,10 @@ $assetHost = (strpos($_SERVER['HTTP_HOST'] ?? '', 'csu.edu.ph') !== false)
 								<p class="text-sm text-slate-500 font-medium">Online Faculty Evaluation System</p>
 							</div>
 							<div
-								class="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-full">
-								<span class="status-pulse status-online relative flex h-2 w-2">
-									<span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-								</span>
-								<span class="text-xs font-semibold text-emerald-700">Online</span>
+								class="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-full"
+								data-system-status>
+								<span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" data-system-status-dot></span>
+								<span class="text-xs font-semibold text-emerald-700" data-system-status-text>Active</span>
 							</div>
 						</div>
 					</div>
@@ -718,9 +718,10 @@ $assetHost = (strpos($_SERVER['HTTP_HOST'] ?? '', 'csu.edu.ph') !== false)
 								<p class="text-sm text-slate-500 font-medium">Enrollment-to-Employment System</p>
 							</div>
 							<div
-								class="flex items-center gap-2 px-3 py-1.5 bg-slate-100 border border-slate-300 rounded-full">
-								<span class="relative inline-flex rounded-full h-2 w-2 bg-slate-400"></span>
-								<span class="text-xs font-semibold text-slate-500">Inactive</span>
+								class="flex items-center gap-2 px-3 py-1.5 bg-slate-100 border border-slate-300 rounded-full"
+								data-system-status>
+								<span class="relative inline-flex rounded-full h-2 w-2 bg-slate-400" data-system-status-dot></span>
+								<span class="text-xs font-semibold text-slate-500" data-system-status-text>Inactive</span>
 							</div>
 						</div>
 					</div>

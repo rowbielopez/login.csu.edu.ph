@@ -748,7 +748,7 @@ const AuthController = {
             const revokedMap = {};
             accessSnap.forEach(doc => {
                 const d = doc.data();
-                const systemId = d.systemId;
+                const systemId = String(d.systemId || '').toUpperCase();
                 if (!systemId) return;
 
                 const accessStatus = String(d.status || 'active').trim().toLowerCase();
@@ -1300,7 +1300,12 @@ const SystemStatusController = {
     _unsub: null,
 
     init() {
-        if (!db) return;
+        if (!db || !auth?.currentUser) {
+            this.destroy();
+            return;
+        }
+
+        this.destroy();
 
         this._unsub = db.collection('systems').onSnapshot((snap) => {
             const statusMap = {};
@@ -1312,6 +1317,7 @@ const SystemStatusController = {
             });
 
             AppState.systemStatusMap = statusMap;
+            this.applyCardStatuses();
 
             if (!AppState.isLoggedIn) return;
 
@@ -1336,6 +1342,37 @@ const SystemStatusController = {
     destroy() {
         this._unsub?.();
         this._unsub = null;
+    },
+
+    applyCardStatuses() {
+        document.querySelectorAll('.system-card[data-system]').forEach((card) => {
+            const systemId = String(card.getAttribute('data-system') || '').toUpperCase();
+            if (!systemId) return;
+
+            const status = String(AppState.systemStatusMap[systemId] || '').trim().toLowerCase();
+            const normalized = status === 'inactive' ? 'inactive' : 'active';
+
+            const badgeEl = card.querySelector('[data-system-status]');
+            const dotEl = card.querySelector('[data-system-status-dot]');
+            const textEl = card.querySelector('[data-system-status-text]');
+            if (!badgeEl || !dotEl || !textEl) return;
+
+            badgeEl.classList.remove('bg-emerald-50', 'border-emerald-200', 'bg-slate-100', 'border-slate-300');
+            dotEl.classList.remove('bg-emerald-500', 'bg-slate-400');
+            textEl.classList.remove('text-emerald-700', 'text-slate-500');
+
+            if (normalized === 'active') {
+                badgeEl.classList.add('bg-emerald-50', 'border-emerald-200');
+                dotEl.classList.add('bg-emerald-500');
+                textEl.classList.add('text-emerald-700');
+                textEl.textContent = 'Active';
+            } else {
+                badgeEl.classList.add('bg-slate-100', 'border-slate-300');
+                dotEl.classList.add('bg-slate-400');
+                textEl.classList.add('text-slate-500');
+                textEl.textContent = 'Inactive';
+            }
+        });
     }
 };
 
@@ -1614,7 +1651,6 @@ function initializeApp() {
 
     // Initialize all controllers
     NavigationController.init();
-    SystemStatusController.init();
     AuthController.init();
     SystemController.init();
     AnnouncementsController.init();
@@ -1629,6 +1665,7 @@ function initializeApp() {
     if (auth) {
         auth.onAuthStateChanged(async (user) => {
             if (user) {
+                SystemStatusController.init();
                 // Reject non-CSU emails silently on session restore
                 if (!user.email || !user.email.toLowerCase().endsWith('@csu.edu.ph')) {
                     await auth.signOut();
@@ -1645,6 +1682,7 @@ function initializeApp() {
                 };
                 await AuthController.resolveFirestoreUser(user, userProfile);
             } else {
+                SystemStatusController.destroy();
                 AuthController.updateUIForLoggedOutUser();
             }
         });
