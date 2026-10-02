@@ -64,8 +64,14 @@ function getDefaultSystemRoleTemplates(systemId) {
         ],
         OFES: [
             { roleKey: 'OFES_ADMINISTRATOR', displayName: 'OFES Administrator', externalValue: 'Administrator', canonicalRole: 'admin' },
+            { roleKey: 'OFES_UNIVERSITY_ADMINISTRATOR', displayName: 'OFES University Administrator', externalValue: 'University Administrator', canonicalRole: 'admin' },
             { roleKey: 'OFES_CAMPUS_ADMIN', displayName: 'OFES Campus Admin', externalValue: 'Campus Admin', canonicalRole: 'admin' },
-            { roleKey: 'OFES_DEAN', displayName: 'OFES Dean', externalValue: 'Dean', canonicalRole: 'staff' }
+            { roleKey: 'OFES_CAMPUS_EXECUTIVE_OFFICER', displayName: 'OFES Campus Executive Officer', externalValue: 'Campus Executive Officer', canonicalRole: 'staff' },
+            { roleKey: 'OFES_DEAN', displayName: 'OFES Dean', externalValue: 'Dean', canonicalRole: 'staff' },
+            { roleKey: 'OFES_COLLEGE_SECRETARY', displayName: 'OFES College Secretary', externalValue: 'College Secretary', canonicalRole: 'staff' },
+            { roleKey: 'OFES_PROGRAM_CHAIR', displayName: 'OFES Program Chair', externalValue: 'Program Chair', canonicalRole: 'staff' },
+            { roleKey: 'OFES_ODI', displayName: 'OFES ODI', externalValue: 'ODI', canonicalRole: 'staff' },
+            { roleKey: 'OFES_PRESIDENT', displayName: 'OFES President', externalValue: 'President', canonicalRole: 'staff' }
         ],
         E2E: [
             { roleKey: 'E2E_ADMIN', displayName: 'E2E Admin', externalValue: 'admin', canonicalRole: 'admin' },
@@ -469,8 +475,22 @@ const UserManagementController = {
         const lowered = raw.toLowerCase();
         if (lowered === 'administrator' || lowered === 'admin') return 'Administrator';
         if (lowered === 'campus admin' || lowered === 'campus_admin' || lowered === 'campus-admin') return 'Campus Admin';
+        if (['university administrator', 'university_administrator', 'university-administrator', 'university admin'].includes(lowered)) return 'University Administrator';
+        if (['campus executive officer', 'campus_executive_officer', 'campus-executive-officer', 'ceo'].includes(lowered)) return 'Campus Executive Officer';
         if (lowered === 'dean') return 'Dean';
+        if (['college secretary', 'college_secretary', 'college-secretary'].includes(lowered)) return 'College Secretary';
+        if (['program chair', 'program_chair', 'program-chair'].includes(lowered)) return 'Program Chair';
+        if (lowered === 'odi') return 'ODI';
+        if (lowered === 'president') return 'President';
         return raw;
+    },
+
+    // OFES scope each role needs at provisioning. Program Chairs keep the programs assigned in OFES.
+    getOfesScopeRequirement(ofesRole) {
+        return {
+            needsCampus: ['Campus Admin', 'Campus Executive Officer', 'Dean', 'College Secretary'].includes(ofesRole),
+            needsCollege: ['Dean', 'College Secretary'].includes(ofesRole)
+        };
     },
 
     resetOfesProvisioningForm() {
@@ -592,8 +612,9 @@ const UserManagementController = {
             || selectedRoleValue;
         const normalizedRole = this.normalizeOfesRole(roleCandidate);
 
-        const requiresCampus = normalizedSystemId === 'OFES' && (normalizedRole === 'Campus Admin' || normalizedRole === 'Dean');
-        const requiresCollege = normalizedRole === 'Dean';
+        const scope = this.getOfesScopeRequirement(normalizedRole);
+        const requiresCampus = normalizedSystemId === 'OFES' && scope.needsCampus;
+        const requiresCollege = scope.needsCollege;
 
         if (!requiresCampus) {
             this.resetOfesProvisioningForm();
@@ -603,8 +624,8 @@ const UserManagementController = {
         sectionEl.classList.remove('hidden');
         collegeRow.classList.toggle('hidden', !requiresCollege);
         hintEl.textContent = requiresCollege
-            ? 'Dean role requires both campus and college mapping in OFES.'
-            : 'Campus Admin role requires campus mapping in OFES.';
+            ? `${normalizedRole} role requires both campus and college mapping in OFES.`
+            : `${normalizedRole} role requires campus mapping in OFES.`;
 
         try {
             await this.loadOfesProvisionOptions();
@@ -658,10 +679,13 @@ const UserManagementController = {
 
         let roles = roleSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        if (!roles.length) {
-            // Seed system role templates on first use.
-            const defaults = getDefaultSystemRoleTemplates(normalizedSystemId);
-            for (const role of defaults) {
+        // Seed system role templates on first use, and add template roles introduced since (e.g. new OFES roles).
+        const existingKeys = new Set(roles.map(role => role.roleKey || role.roleId));
+        const missing = getDefaultSystemRoleTemplates(normalizedSystemId)
+            .filter(role => !existingKeys.has(role.roleKey));
+        const shouldSeed = !roles.length || normalizedSystemId === 'OFES';
+        if (shouldSeed) {
+            for (const role of missing) {
                 const docId = `${normalizedSystemId}_${role.roleKey}`;
                 await db.collection('system_roles').doc(docId).set({
                     ...role,
@@ -669,8 +693,8 @@ const UserManagementController = {
                     updatedAt: serverTimestamp(),
                     source: 'auto_seed'
                 }, { merge: true });
+                roles.push({ id: docId, ...role });
             }
-            roles = defaults.map(role => ({ id: `${normalizedSystemId}_${role.roleKey}`, ...role }));
         }
 
         roles.sort((a, b) => String(a.displayName || '').localeCompare(String(b.displayName || '')));
@@ -929,18 +953,17 @@ const UserManagementController = {
 
             if (normalizedSystemId === 'OFES') {
                 const ofesRole = this.normalizeOfesRole(externalRoleValue || roleName || roleKey);
-                const needsCampus = ofesRole === 'Campus Admin' || ofesRole === 'Dean';
-                const needsCollege = ofesRole === 'Dean';
+                const { needsCampus, needsCollege } = this.getOfesScopeRequirement(ofesRole);
 
                 const campusValue = String(document.getElementById('ofesCampusSelect')?.value || '').trim();
                 const collegeValue = String(document.getElementById('ofesCollegeSelect')?.value || '').trim();
 
                 if (needsCampus && !campusValue) {
-                    AdminToast.show('warning', 'Incomplete', 'OFES Campus Admin/Dean assignment requires campus selection.');
+                    AdminToast.show('warning', 'Incomplete', `OFES ${ofesRole} assignment requires campus selection.`);
                     return;
                 }
                 if (needsCollege && !collegeValue) {
-                    AdminToast.show('warning', 'Incomplete', 'OFES Dean assignment requires both campus and college.');
+                    AdminToast.show('warning', 'Incomplete', `OFES ${ofesRole} assignment requires both campus and college.`);
                     return;
                 }
 
